@@ -12,9 +12,9 @@
         <relativePath/> <!-- lookup parent from repository -->
     </parent>
     <groupId>com.zecola</groupId>
-    <artifactId>zecolapi-backend</artifactId>
+    <artifactId>zecolabi-backend</artifactId>
     <version>0.0.1-SNAPSHOT</version>
-    <name>zecolapi-backend</name>
+    <name>zecolabi-backend</name>
     <properties>
         <java.version>1.8</java.version>
     </properties>
