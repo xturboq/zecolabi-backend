@@ -138,22 +138,6 @@ public class ChartController {
     }
 
     /**
-     * 分页获取列表（仅管理员）
-     *
-     * @param chartQueryRequest
-     * @return
-     */
-    @PostMapping("/list/page")
-    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
-    public BaseResponse<Page<Chart>> listChartByPage(@RequestBody ChartQueryRequest chartQueryRequest) {
-        long current = chartQueryRequest.getCurrent();
-        long size = chartQueryRequest.getPageSize();
-        Page<Chart> chartPage = chartService.page(new Page<>(current, size),
-                getQueryWrapper(chartQueryRequest));
-        return ResultUtils.success(chartPage);
-    }
-
-    /**
      * 分页获取列表（封装类）
      *
      * @param chartQueryRequest
