@@ -1,5 +1,6 @@
 package com.zecola.project.controller;
 
+import cn.hutool.core.io.FileUtil;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.zecola.project.annotation.AuthCheck;
@@ -8,26 +9,36 @@ import com.zecola.project.common.DeleteRequest;
 import com.zecola.project.common.ErrorCode;
 import com.zecola.project.common.ResultUtils;
 import com.zecola.project.constant.CommonConstant;
+import com.zecola.project.constant.FileConstant;
 import com.zecola.project.constant.UserConstant;
 import com.zecola.project.exception.BusinessException;
 import com.zecola.project.exception.ThrowUtils;
-import com.zecola.project.model.dto.chart.ChartAddRequest;
-import com.zecola.project.model.dto.chart.ChartEditRequest;
-import com.zecola.project.model.dto.chart.ChartQueryRequest;
-import com.zecola.project.model.dto.chart.ChartUpdateRequest;
+import com.zecola.project.manager.AiManager;
+import com.zecola.project.manager.RedisLimiterManager;
+import com.zecola.project.model.dto.chart.*;
+import com.zecola.project.model.dto.file.UploadFileRequest;
 import com.zecola.project.model.entity.Chart;
 import com.zecola.project.model.entity.User;
+import com.zecola.project.model.enums.FileUploadBizEnum;
+import com.zecola.project.model.vo.BiResponse;
 import com.zecola.project.service.ChartService;
 import com.zecola.project.service.UserService;
+import com.zecola.project.utils.ExcelUtils;
 import com.zecola.project.utils.SqlUtils;
+import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.ObjectUtils;
+import org.apache.commons.lang3.RandomStringUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.BeanUtils;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
+import java.io.File;
+import java.util.Arrays;
+import java.util.List;
 
 /**
  * 帖子接口
@@ -37,6 +48,7 @@ import javax.servlet.http.HttpServletRequest;
 @RestController
 @RequestMapping("/chart")
 @Slf4j
+@Data
 public class ChartController {
 
     @Resource
@@ -44,6 +56,12 @@ public class ChartController {
 
     @Resource
     private UserService userService;
+
+    @Resource
+    private AiManager aiManager;
+
+    @Resource
+    private RedisLimiterManager redisLimiterManager;
 
     // region 增删改查
 
@@ -236,6 +254,95 @@ public class ChartController {
         queryWrapper.orderBy(SqlUtils.validSortField(sortField), sortOrder.equals(CommonConstant.SORT_ORDER_ASC),
                 sortField);
         return queryWrapper;
+    }
+
+    /**
+     * 文件上传
+     *
+     * @param multipartFile
+     * @param genChartByAiRequest
+     * @param request
+     * @return
+     */
+    @PostMapping("/gen")
+    public BaseResponse<BiResponse> getChartByAi(@RequestPart("file") MultipartFile multipartFile,
+                                           GenChartByAiRequest genChartByAiRequest, HttpServletRequest request) {
+        String name = genChartByAiRequest.getName();
+        String goal = genChartByAiRequest.getGoal();
+        String chartType = genChartByAiRequest.getChartType();
+        // 校验
+        ThrowUtils.throwIf(StringUtils.isBlank(goal), ErrorCode.PARAMS_ERROR, "目标为空");
+        ThrowUtils.throwIf(StringUtils.isBlank(name) && name.length() > 80, ErrorCode.PARAMS_ERROR, "图表名称为空或内容过长");
+        // 校验文件
+        long size = multipartFile.getSize();
+        String originalFilename = multipartFile.getOriginalFilename();
+        final long One_MB = 1024 * 1024L;
+        ThrowUtils.throwIf(size > One_MB, ErrorCode.PARAMS_ERROR, "文件大小超过 1M");
+        String suffix = FileUtil.getSuffix(originalFilename);
+        final List<String> validFileSuffixList = Arrays.asList("xls","xlsx");
+        ThrowUtils.throwIf(!validFileSuffixList.contains(suffix), ErrorCode.PARAMS_ERROR, "不支持该类型文件");
+
+        User loginuser = userService.getLoginUser(request);
+        // 限流
+        redisLimiterManager.doRateLimit("genChartByAi_" + loginuser.getId());
+
+        // 分析需求：
+        // 分析网站用户的增长情况
+        // 原始数据：
+        // 日期,用户数
+        // 1号,10
+        // 2号,20
+        // 3号,30
+
+        // 模型 ID
+        long biModelId = CommonConstant.AIBI_MODEL_ID;
+        // 构造用户输入
+        StringBuilder userInput = new StringBuilder();
+        userInput.append("分析需求：").append("\n");
+        String userGoal = goal;
+        if (StringUtils.isNotBlank(userGoal)){
+            //todo 优化
+            userGoal = userGoal.concat("\n").concat("请使用").concat(chartType);
+            userInput.append(userGoal).append("\n");
+        }
+
+        userInput.append(userGoal).append("\n");
+        userInput.append("原始数据：").append("\n");
+        // 压缩后的数据
+        String result = ExcelUtils.excelToCsv(multipartFile);
+        userInput.append(result).append("\n");
+
+        String resultMessage = aiManager.doChat(biModelId, userInput.toString());
+
+        String[] splits = resultMessage.split("【【【【【");
+        if (splits.length < 3) {
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "AI 生成错误");
+        }
+        String genChart = splits[1].trim();
+        String genResult = splits[2].trim();
+
+        // 插入到数据库
+        Chart chart = new Chart();
+        chart.setName(name);
+        chart.setGoal(goal);
+        chart.setChartData(result);
+        chart.setChartType(chartType);
+        chart.setGenChart(genChart);
+        chart.setGenResult(genResult);
+        chart.setUserId(loginuser.getId());
+        boolean saveResult = chartService.save(chart);
+        if (!saveResult) {
+            return ResultUtils.error(ErrorCode.SYSTEM_ERROR, "图表保存失败");
+        }
+
+
+        BiResponse biResponse = new BiResponse();
+        biResponse.setGenChart(genChart);
+        biResponse.setGenResult(genResult);
+
+        return ResultUtils.success(biResponse);
+
+
     }
 
 }
