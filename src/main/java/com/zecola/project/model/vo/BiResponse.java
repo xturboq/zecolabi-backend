@@ -18,5 +18,5 @@ public class BiResponse {
     /**
      * 图标类型
      */
-    private String chartId;
+    private Long chartId;
 }
