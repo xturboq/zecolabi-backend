@@ -3,9 +3,11 @@ package com.zecola.project.manager;
 import com.zecola.project.common.ErrorCode;
 import com.zecola.project.exception.BusinessException;
 import org.redisson.api.*;
+import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
 
+@Service
 public class RedisLimiterManager {
 
     @Resource
